@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "esModuleInterop": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noImplicitAny": true,
+    "outDir": "dist",
+    "resolveJsonModule": true,
+    "removeComments": true,
+    "rootDir": "src",
+    "sourceMap": true,
+    "target": "ESNext"
+  },
+  "exclude": ["node_modules", "**/*.test.ts", "package.json"],
+  "include": ["src/**/*"],
+  "lib": ["ESNext"]
+}
