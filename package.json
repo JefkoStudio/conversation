@@ -68,10 +68,11 @@
     "compile": "npx tsc --skipLibCheck",
     "postcompile": "npx tsc-alias",
     "lint": "eslint . --ext .ts",
-    "prepare": "npm run compile -- --sourceMap false",
+    "prepare": "npm run compile -- --declarationMap false --sourceMap false",
     "pretest": "npm run lint",
     "test": "NODE_OPTIONS=--experimental-vm-modules npx jest"
   },
   "type": "module",
+  "types": "dist/index.d.ts",
   "version": "1.0.0"
 }

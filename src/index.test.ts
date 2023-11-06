@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { ConversationProps, Observer } from './index.d.js';
+import type { ConversationProps, Observer } from './index.js';
 
 import { describe, expect, jest, it } from '@jest/globals';
 

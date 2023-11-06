@@ -1,4 +1,4 @@
-import type { Flow } from './index.d.js';
+import type { Flow } from './index.js';
 
 import { readFile } from 'fs/promises';
 import mermaid from 'mermaid';
