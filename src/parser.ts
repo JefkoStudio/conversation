@@ -1,3 +1,10 @@
+/**
+ * A module for transcoding UML to JSON
+ *
+ * @author Daniel Jeffery
+ * @type module
+ */
+
 import type { Flow } from './index.js';
 
 import { readFile } from 'fs/promises';

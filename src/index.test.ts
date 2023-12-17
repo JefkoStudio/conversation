@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ConversationProps, Observer } from './index.js';
 
-import { describe, expect, jest, it } from '@jest/globals';
+import { beforeEach, describe, expect, jest, it } from '@jest/globals';
 
 jest.unstable_mockModule('fs/promises', () => ({
   readFile: jest.fn(),

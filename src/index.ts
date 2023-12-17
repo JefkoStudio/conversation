@@ -1,8 +1,7 @@
 /**
  * A module for navigating an UML flowchartted conversation.
  *
- * @author Daniel
- *   Jeffery[modules@danieljeffer.me](mailto:modules@danieljeffer.me)
+ * @author Daniel Jeffery
  * @type module
  */
 
