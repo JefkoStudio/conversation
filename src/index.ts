@@ -5,54 +5,13 @@
  * @type module
  */
 
-import { readFile } from 'fs/promises';
+import type { Flow } from 'src/parser.js';
 
 export * from './parser.js';
 
-export type Accessibility = {
-  description?: string;
-  title?: string;
-};
-
-export type Edge = {
-  end: string;
-  labelType: string;
-  length: number;
-  start: string;
-  stroke: string;
-  text: string;
-  type: string;
-};
-
-export type Vertex = {
-  classes: string[];
-  domId: string;
-  id: string;
-  labelType: string;
-  link?: string;
-  linkTarget?: string;
-  props: Record<string, unknown> & {
-    module?: unknown;
-    key?: string;
-    src?: string;
-  };
-  styles: string[];
-  text: string;
-  type?: string;
-};
-
-export type Flow = {
-  acc?: Accessibility;
-  description?: string;
-  edges: Edge[];
-  title?: string;
-  type: string;
-  vertices: Record<string, Vertex>;
-};
-
 export type Observer = (action: string, step: Step) => void;
 
-export type StepHook = {
+export type StepHook<T = unknown> = T & {
   isComplete: (throwOnError?: boolean) => Promise<boolean>;
   isReady: () => Promise<boolean>;
   render: <R>(props?: Record<string, unknown>) => Promise<R>;
@@ -64,7 +23,7 @@ export type StepProps = Record<string, unknown> & {
 };
 
 export type Step = {
-  edges?: { from: Edge[]; to: Edge[] };
+  edges?: Flow['steps'][0]['edges'];
   hook: StepHook;
   id: string;
 };
@@ -79,7 +38,6 @@ export type ConversationHook = Required<StepHook> & {
 export type ConversationProps = StepProps & {
   flow?: Flow;
   observers?: Observer[];
-  src?: string;
   start?: string;
 };
 
@@ -113,8 +71,8 @@ export class Conversation implements ConversationHook {
     observers = [],
     start = undefined,
   }: ConversationProps) {
-    if (!flow?.type?.includes('flowchart'))
-      throw new Error('Only flowcharts are supported.');
+    if (flow?.type !== 'conversation')
+      throw new Error('Only conversation flows are supported.');
 
     this.breadcrumbs = [];
     this.flow = flow;
@@ -125,7 +83,6 @@ export class Conversation implements ConversationHook {
     this.step = this.findStart(start);
   }
 
-  // TODO: Add id param to go back to a specific vertex in history
   /**
    * Navigate to the previous step, if applicable.
    *
@@ -165,21 +122,16 @@ export class Conversation implements ConversationHook {
 
     const next = await this.gen.next(id);
 
-    if (
-      id === undefined &&
-      !next.done &&
-      (await next.value?.hook?.isComplete())
-    ) {
-      this.notify('continue', next.value);
-
-      return this.continue(id, fromChild);
-    }
+    if (step?.id === next?.value?.id) return next.value;
 
     if (next.done && this.parent) {
       return this.parent.continue(id, true);
     }
 
-    return this.notify(next.done ? 'done' : id ?? 'continue', next.value);
+    return this.notify(
+      (next.done && !this.parent ? 'done' : id) ?? 'continue',
+      next.value
+    );
   }
 
   /**
@@ -191,32 +143,23 @@ export class Conversation implements ConversationHook {
    * @returns
    */
   private async findStart(start?: string) {
-    if (start in this.flow.vertices) {
-      const step = this.notify(start, await this.get(start));
-      this.gen?.next(); // Start the generator
-      return step;
+    let step: Step;
+
+    if (start) {
+      step = await this.get(start);
     }
 
-    for (const id in this.flow.vertices) {
-      const {
-        props: { uri },
-        type,
-      } = this.flow.vertices[id];
+    let index = 0;
+    while (step || this.flow.starts[index]) {
+      if (await step?.hook?.isReady?.()) break;
 
-      if (type === 'stadium' || uri === start) {
-        this.step = this.get(id);
-        break;
-      }
+      step = await this.get(this.flow.starts[index++] ?? ' ');
     }
 
-    let vertex: Step;
-    do {
-      vertex = (await this.gen?.next(vertex?.id))?.value;
-    } while (await vertex?.hook?.isComplete());
+    if (!step) throw new Error('Could not find a starting point.');
 
-    if (!vertex) throw new Error('Could not find a starting point.');
-
-    return this.notify('start', vertex);
+    this.gen?.next(); // Start the generator
+    return this.notify(step?.id === start ? start : 'start', step);
   }
 
   /**
@@ -228,29 +171,32 @@ export class Conversation implements ConversationHook {
    * @returns {AsyncGenerator<Step, Step, string>}
    */
   private async *genContinue(): AsyncGenerator<Step, Step, string> {
+    let id;
     let next: Step = await this.step;
 
-    while (next) {
-      const id = yield next;
-      const step = await this.get(id);
+    outer: while (next) {
+      if (await next?.hook?.isComplete?.()) {
+        this.breadcrumbs.push(next);
 
-      if (!(await step?.hook?.isComplete())) {
-        next = step;
-        continue;
-      }
+        if (id) {
+          next = await this.get(id);
+          continue;
+        } else {
+          for (const { end } of next.edges.to) {
+            const _next = await this.get(end);
 
-      next = undefined;
-      this.breadcrumbs.push(step);
+            if (!(await _next?.hook?.isReady?.())) continue;
 
-      if (step) {
-        for (const { end } of step.edges.to) {
-          const _next = await this.get(end);
+            next = _next;
+            continue outer;
+          }
 
-          if (!(await _next?.hook.isReady())) continue;
-
-          next = _next;
+          next = undefined;
+          continue;
         }
       }
+
+      id = yield next;
     }
 
     return next;
@@ -266,26 +212,26 @@ export class Conversation implements ConversationHook {
   async get(id?: string): Promise<Step | undefined> {
     if (!id) return this.step;
 
-    if (!(id in this.flow.vertices)) return;
+    if (!(id in this.flow.steps)) return;
 
     const {
-      props: { module, key, src, ...props },
+      edges,
+      props: { module, key, ...props },
       type,
-    } = this.flow.vertices[id];
+    } = this.flow.steps[id];
     let step;
 
     props.conversation = this;
 
     switch (type) {
       case 'subroutine':
-        if (!src && !props.flow)
+        if (!props.flow)
           throw new Error(`No source provided for subroutine, ${id}.`);
 
         props.observers = this.observers;
         step = conversation;
         break;
       default:
-        // TODO: Add hook for custom import
         if (typeof module === 'string') {
           // istanbul ignore next
           step = (await import(module))?.[key ?? 'default'];
@@ -296,24 +242,7 @@ export class Conversation implements ConversationHook {
 
     const hook = await step?.({ ...props });
 
-    return {
-      edges: this.flow.edges.reduce(
-        (acc, cur) => {
-          if (cur.end === id) {
-            acc.from.push(cur);
-          }
-
-          if (cur.start === id) {
-            acc.to.push(cur);
-          }
-
-          return acc;
-        },
-        { from: [], to: [] }
-      ),
-      hook,
-      id,
-    };
+    return { edges, hook, id };
   }
 
   /**
@@ -324,11 +253,13 @@ export class Conversation implements ConversationHook {
    * @returns
    */
   async isComplete(throwOnError: boolean = false) {
-    return Boolean(
+    return !(
       await Promise.all(
-        this.breadcrumbs.map((cur) => cur.hook.isComplete(throwOnError))
+        [await this.get(), ...this.breadcrumbs].map(
+          (cur) => cur?.hook?.isComplete?.(throwOnError) ?? true
+        )
       )
-    );
+    ).some((pass) => !pass);
   }
 
   /**
@@ -366,10 +297,18 @@ export class Conversation implements ConversationHook {
    * @returns {Promise<unknown>}
    */
   async render<R>(props?: Record<string, unknown>): Promise<R> {
+    const step = await this.step;
+
     // istanbul ignore next
     const renderProps = {
-      // TODO: Add related edges as specific actions
       ...props,
+      actions: step.edges?.to
+        ?.filter?.((edge) => edge.type === 'arrow_point')
+        ?.map?.((edge) => ({
+          id: edge.end,
+          label: edge.text,
+          type: edge.stroke === 'normal' ? 'primary' : 'secondary',
+        })),
       back: async () => (await this.back())?.hook,
       continue: async (id?: string) => (await this.continue(id))?.hook,
     };
@@ -377,7 +316,7 @@ export class Conversation implements ConversationHook {
     if (typeof props?.renderer === 'function')
       return props.renderer(renderProps);
 
-    return (await this.step)?.hook.render(renderProps);
+    return step?.hook?.render?.(renderProps);
   }
 
   /**
@@ -416,9 +355,5 @@ export class Conversation implements ConversationHook {
 export default async function conversation(
   props: ConversationProps
 ): Promise<Conversation> {
-  if (props.src) {
-    props.flow = JSON.parse(await readFile(props.src, 'utf8'));
-  }
-
   return new Conversation(props);
 }

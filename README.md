@@ -1,6 +1,6 @@
 # Conversation
 
-A module for using Mermaid.js flowcharts to outline and navigate a conversation.
+A module to progammatically and modularly navigate a conversation from a UML flowchart.
 
 ## Definitions
 
@@ -29,6 +29,8 @@ A module for using Mermaid.js flowcharts to outline and navigate a conversation.
      start([Start]) --continue--> collection[Collect Info]
      collection --validate/submit--> END([End])
    ```
+
+- Only `stadium` nodes without incoming connections will be used as starting points.
 
 2. Ensure each step has a `module` property for handling the step
    `step[|module:./step.mjs|]`

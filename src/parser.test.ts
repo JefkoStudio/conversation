@@ -5,26 +5,38 @@ import { unlink, writeFile } from 'fs/promises';
 import { fromFile, parse } from './parser.js';
 
 describe('Parser', () => {
+  it('should restrict to flowcharts', async () => {
+    expect(
+      parse(`
+sequenceDiagram
+  start->>finish: test
+    `)
+    ).rejects.toThrow('Only flowchart diagrams are supported.');
+  });
+
   it('should parse a basic flowchart', async () => {
     const result = await parse(`
 flowchart
-  start --> finish
+  start([Start]) --> finish
     `);
 
-    expect(result).toHaveProperty('edges', [
-      expect.objectContaining({
-        end: 'finish',
-        start: 'start',
-      }),
-    ]);
-    expect(result).toHaveProperty('type', expect.stringContaining('flowchart'));
+    expect(result).toHaveProperty('starts', ['start']);
+    expect(result).toHaveProperty('type', 'conversation');
     expect(result).toHaveProperty(
-      'vertices',
+      'steps',
       expect.objectContaining({
         finish: expect.objectContaining({
+          edges: {
+            from: [expect.objectContaining({ end: 'finish', start: 'start' })],
+            to: [],
+          },
           id: 'finish',
         }),
         start: expect.objectContaining({
+          edges: {
+            from: [],
+            to: [expect.objectContaining({ end: 'finish', start: 'start' })],
+          },
           id: 'start',
         }),
       })
@@ -45,7 +57,7 @@ flowchart
 
     const output = await fromFile(path);
 
-    ['edges', 'type', 'vertices'].map((key) =>
+    ['starts', 'steps', 'type'].map((key) =>
       expect(output).toHaveProperty(key)
     );
 
@@ -69,7 +81,7 @@ flowchart
 
     expect(output).toEqual(
       expect.objectContaining({
-        vertices: expect.objectContaining({
+        steps: expect.objectContaining({
           sub: expect.objectContaining({
             props: expect.objectContaining({
               src: expect.stringContaining(dir),

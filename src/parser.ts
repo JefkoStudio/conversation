@@ -5,11 +5,59 @@
  * @type module
  */
 
-import type { Flow } from './index.js';
-
 import { readFile } from 'fs/promises';
 import mermaid from 'mermaid';
 import { format, parse as pathParse, resolve } from 'path';
+
+export type Accessibility = {
+  description?: string;
+  title?: string;
+};
+
+export type Edge = {
+  end: string;
+  labelType: string;
+  length: number;
+  start: string;
+  stroke: string;
+  text: string;
+  type: string;
+};
+
+export type Flow = Omit<Flowchart, 'edges' | 'vertices'> & {
+  starts: string[];
+  steps: Record<string, FlowStep>;
+};
+
+export type Vertex = {
+  classes: string[];
+  domId: string;
+  id: string;
+  labelType: string;
+  link?: string;
+  linkTarget?: string;
+  props: Record<string, unknown> & {
+    module?: unknown;
+    key?: string;
+    src?: string;
+  };
+  styles: string[];
+  text: string;
+  type?: string;
+};
+
+export type Flowchart = {
+  acc?: Accessibility;
+  description?: string;
+  edges?: Edge[];
+  title?: string;
+  type: string;
+  vertices: Record<string, Vertex>;
+};
+
+export type FlowStep = Vertex & {
+  edges: { from: Edge[]; to: Edge[] };
+};
 
 mermaid.initialize({
   startOnLoad: false,
@@ -28,8 +76,8 @@ export async function fromFile(src: string, dir?: string) {
   const uml = await readFile(file, 'utf8');
   const output = await parse(uml);
 
-  for (const index in output.vertices) {
-    const vertex = output.vertices[index];
+  for (const id in output.steps) {
+    const vertex = output.steps[id];
 
     if (vertex.type !== 'subroutine') continue;
 
@@ -61,16 +109,47 @@ export async function fromFile(src: string, dir?: string) {
  */
 export async function parse(uml: string): Promise<Flow> {
   const diagram = await mermaid.mermaidAPI.getDiagramFromText(uml);
+
+  if (!diagram.type.includes('flowchart'))
+    throw new Error('Only flowchart diagrams are supported.');
+
   const db = (diagram.getParser() as any).yy; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const edges = db.getEdges();
+  const starts: string[] = [];
+  const steps: Flow['steps'] = {};
+  const vertices = db.getVertices();
+
+  for (const id in vertices) {
+    const step = (steps[id] = vertices[id]);
+
+    step.edges = edges.reduce(
+      (acc: FlowStep['edges'], cur: Edge) => {
+        if (cur.end === id) {
+          acc.from.push(cur);
+        }
+
+        if (cur.start === id) {
+          acc.to.push(cur);
+        }
+
+        return acc;
+      },
+      { from: [], to: [] }
+    );
+
+    if (step.type !== 'stadium' || step.edges.from.length) continue;
+
+    starts.push(id);
+  }
 
   return {
     acc: {
       description: db.getAccDescription(),
       title: db.getAccTitle,
     },
-    edges: db.getEdges(),
+    starts,
+    steps,
     title: db.getDiagramTitle(),
-    type: diagram.type,
-    vertices: db.getVertices(),
+    type: 'conversation',
   };
 }

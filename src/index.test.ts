@@ -7,7 +7,6 @@ jest.unstable_mockModule('fs/promises', () => ({
   readFile: jest.fn(),
 }));
 
-const { readFile } = await import('fs/promises');
 const { default: conversation } = await import('./index.js');
 
 const createEdge = (obj?: any) => ({
@@ -20,15 +19,16 @@ const createEdge = (obj?: any) => ({
 });
 
 const createGraph = (obj?: any) => ({
-  edges: [],
-  type: 'flowchart',
-  vertices: {},
+  starts: [],
+  steps: {},
+  type: 'conversation',
   ...obj,
 });
 
 const createVertex = (obj?: any): ConversationProps['flow'] => ({
   classes: [],
   domId: obj?.id,
+  edges: { from: [], to: [] },
   labelType: 'text',
   styles: [],
   text: obj?.id,
@@ -45,18 +45,40 @@ describe('Conversation', () => {
     jest.resetAllMocks();
   });
 
-  it('should fail to load if not provided with a flowchart.', async () => {
+  it('should fail to load if not provided with a flowchart', async () => {
     const graph = createGraph({
       type: 'barchart',
     });
 
     expect(conversation({ flow: graph })).rejects.toThrow(
-      'Only flowcharts are supported.'
+      'Only conversation flows are supported.'
     );
   });
 
-  it('should fail if no starting point can be found', async () => {
+  it('should fail to load if no starting node is given', async () => {
     const graph = createGraph();
+    const convo = await conversation({ flow: graph });
+
+    expect(convo.isReady()).rejects.toThrow('Could not find a starting point.');
+  });
+
+  it('should fail if no starting point is ready', async () => {
+    const mockStartMod = () =>
+      jest.mocked({
+        isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+      });
+    const graph = createGraph({
+      starts: ['start'],
+      steps: {
+        start: createVertex({
+          id: 'start',
+          props: {
+            module: mockStartMod,
+          },
+          type: 'stadium',
+        }),
+      },
+    });
     const convo = await conversation({ flow: graph });
 
     expect(convo.isReady()).rejects.toThrow('Could not find a starting point.');
@@ -64,7 +86,8 @@ describe('Conversation', () => {
 
   it('should try and load a module when given a string', async () => {
     const graph = createGraph({
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
           id: 'start',
           props: {
@@ -77,14 +100,19 @@ describe('Conversation', () => {
     const convo = await conversation({ flow: graph });
 
     expect(convo.isReady()).rejects.toThrow(
-      `Cannot find module '${graph.vertices.start.props.module}' from 'src/index.ts'`
+      `Cannot find module '${graph.steps.start.props.module}' from 'src/index.ts'`
     );
   });
 
   it("should return undefined when requesting a step that doesn't exist", async () => {
+    const mockStartMod = () =>
+      jest.mocked({
+        isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      });
     const graph = createGraph({
-      vertices: {
-        start: createVertex({ id: 'start', isComplete: jest.fn() }),
+      starts: ['start'],
+      steps: {
+        start: createVertex({ id: 'start', props: { module: mockStartMod } }),
       },
     });
     const convo = await conversation({ flow: graph });
@@ -108,7 +136,8 @@ describe('Conversation', () => {
           render: mockRender,
         });
       const graph = createGraph({
-        vertices: {
+        starts: ['start'],
+        steps: {
           start: createVertex({
             id: 'start',
             props: {
@@ -135,10 +164,12 @@ describe('Conversation', () => {
     const mockTestMod = jest.fn().mockReturnValueOnce({
       id: 'start',
       isComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
     });
 
     const graph = createGraph({
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
           id: 'start',
           props: {
@@ -167,10 +198,12 @@ describe('Conversation', () => {
   it('should load additional props for a given step', async () => {
     const mockTestMod = jest.fn().mockReturnValueOnce({
       isComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
     });
 
     const graph = createGraph({
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
           id: 'start',
           props: {
@@ -204,6 +237,7 @@ describe('Conversation', () => {
           .fn<() => Promise<boolean>>()
           .mockResolvedValueOnce(false)
           .mockResolvedValueOnce(isComplete),
+        isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
       });
 
       const mockNextMod = jest.fn().mockReturnValueOnce({
@@ -212,22 +246,27 @@ describe('Conversation', () => {
         isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
       });
 
+      const edge = createEdge({ end: 'next', start: 'start' });
       const graph = createGraph({
-        edges: [
-          createEdge({
-            end: 'next',
-            start: 'start',
-          }),
-        ],
-        vertices: {
+        starts: ['start'],
+        steps: {
           start: createVertex({
+            edges: {
+              from: [],
+              to: [edge],
+            },
             id: 'start',
             props: {
               module: mockTestMod,
             },
             text: 'start',
+            type: 'stadium',
           }),
           next: createVertex({
+            edges: {
+              from: [edge],
+              to: [],
+            },
             id: 'next',
             props: {
               module: mockNextMod,
@@ -241,7 +280,6 @@ describe('Conversation', () => {
       convo.subscribe(listener);
       await convo.isReady();
 
-      expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenNthCalledWith(
         1,
         'start',
@@ -252,36 +290,123 @@ describe('Conversation', () => {
 
       await convo.continue();
 
-      expect(listener).toHaveBeenCalledTimes(2);
-      expect(listener).toHaveBeenNthCalledWith(
-        2,
-        'continue',
-        expect.objectContaining({
-          id: isComplete ? 'next' : 'start',
-        })
-      );
+      if (isComplete) {
+        expect(listener).toHaveBeenCalledWith(
+          'continue',
+          expect.objectContaining({
+            id: 'next',
+          })
+        );
+      } else {
+        expect(listener).not.toHaveBeenCalledWith(
+          'continue',
+          expect.objectContaining({
+            id: 'next',
+          })
+        );
+      }
     }
   );
 
-  it('should start the conversation on a given step', async () => {
-    const mockTestMod = jest.fn().mockReturnValueOnce({
+  it('should continue to a specific next step', async () => {
+    const mockStartMod = jest.fn().mockReturnValueOnce({
+      id: 'start',
+      isComplete: jest
+        .fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    });
+    const mockNextMod = jest.fn().mockReturnValueOnce({
       id: 'next',
       isComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    });
+    const mockSkipMod = jest.fn().mockReturnValueOnce({
+      id: 'skip',
+      isComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
     });
 
     const graph = createGraph({
-      vertices: {
+      starts: ['start'],
+      steps: {
+        start: createVertex({
+          edges: {
+            from: [],
+            to: [
+              createEdge({
+                end: 'skip',
+                start: 'start',
+              }),
+              createEdge({
+                end: 'next',
+                start: 'start',
+              }),
+            ],
+          },
+          id: 'start',
+          props: {
+            module: mockStartMod,
+          },
+          type: 'stadium',
+        }),
+        next: createVertex({
+          id: 'next',
+          props: {
+            module: mockNextMod,
+          },
+        }),
+        skip: createVertex({
+          id: 'skip',
+          props: {
+            module: mockSkipMod,
+          },
+        }),
+      },
+    });
+
+    const convo = await conversation({ flow: graph });
+    convo.subscribe(listener);
+    await convo.isReady();
+    await convo.continue('next');
+
+    expect(listener).toHaveBeenCalledWith(
+      'next',
+      expect.objectContaining({
+        id: 'next',
+      })
+    );
+    expect(listener).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        id: 'skip',
+      })
+    );
+  });
+
+  it('should start the conversation on a given step', async () => {
+    const mockTestMod = jest.fn().mockReturnValueOnce({
+      id: 'other',
+      isComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    });
+
+    const graph = createGraph({
+      starts: ['start'],
+      steps: {
         start: createVertex({
           id: 'start',
           props: {
-            module: mockTestMod,
+            module: jest.fn(),
           },
           text: 'start',
+          type: 'stadium',
         }),
         other: createVertex({
-          id: 'next',
+          id: 'other',
           props: {
-            module: jest.fn(),
+            module: mockTestMod,
           },
           text: 'next',
         }),
@@ -302,19 +427,22 @@ describe('Conversation', () => {
   });
 
   it('should skip steps that are not ready', async () => {
+    const edgeSkip = createEdge({
+      end: 'skip',
+      start: 'start',
+    });
+    const edgeNext = createEdge({
+      end: 'next',
+      start: 'start',
+    });
     const graph = createGraph({
-      edges: [
-        createEdge({
-          end: 'skip',
-          start: 'start',
-        }),
-        createEdge({
-          end: 'next',
-          start: 'start',
-        }),
-      ],
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
+          edges: {
+            from: [],
+            to: [edgeSkip, edgeNext],
+          },
           id: 'start',
           props: {
             module: async () =>
@@ -366,17 +494,21 @@ describe('Conversation', () => {
         .fn<() => Promise<boolean>>()
         .mockResolvedValueOnce(false)
         .mockResolvedValue(true),
+      isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
     });
 
     const graph = createGraph({
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
+          edges: { from: [], to: [] },
           id: 'start',
           props: {
             module: mockTestMod,
             testProp: true,
           },
           text: 'start',
+          type: 'stadium',
         }),
       },
     });
@@ -397,29 +529,31 @@ describe('Conversation', () => {
         .mockResolvedValue(true),
       jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
     ];
+    const edgeNext = createEdge({
+      end: 'next',
+      start: 'start',
+    });
+    const edgeDone = createEdge({
+      end: 'done',
+      start: 'next',
+    });
     const graph = createGraph({
-      edges: [
-        createEdge({
-          end: 'next',
-          start: 'start',
-        }),
-        createEdge({
-          end: 'done',
-          start: 'next',
-        }),
-      ],
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
+          edges: { from: [], to: [edgeNext] },
           id: 'start',
           props: {
             module: () =>
               jest.mocked({
                 isComplete: crumbs[0],
+                isReady: () => Promise.resolve(true),
               }),
           },
           type: 'stadium',
         }),
         next: createVertex({
+          edges: { from: [edgeNext], to: [edgeDone] },
           id: 'next',
           props: {
             module: () =>
@@ -430,6 +564,7 @@ describe('Conversation', () => {
           },
         }),
         done: createVertex({
+          edges: { from: [edgeDone], to: [] },
           id: 'done',
           props: {
             module: () =>
@@ -447,54 +582,104 @@ describe('Conversation', () => {
 
     expect(convo.isComplete()).resolves.toBe(true);
     expect(convo.breadcrumbs.length).toBe(3);
-    expect(crumbs[0]).toHaveBeenCalledTimes(3);
+    expect(crumbs[0]).toHaveBeenCalledTimes(2);
+  });
+
+  it('should unsubscribe a given listener', async () => {
+    const graph = createGraph({
+      starts: ['start'],
+      steps: {
+        start: createVertex({
+          edges: {
+            from: [],
+            to: [createEdge({ end: 'next', start: 'start' })],
+          },
+          id: 'start',
+          props: {
+            module: () =>
+              jest.mocked({
+                isComplete: () =>
+                  jest
+                    .fn<() => Promise<boolean>>()
+                    .mockResolvedValueOnce(false)
+                    .mockResolvedValue(true),
+                isReady: () => Promise.resolve(true),
+              }),
+          },
+          type: 'stadium',
+        }),
+        next: createVertex({
+          id: 'next',
+          props: {
+            module: () =>
+              jest.mocked({
+                isComplete: () => Promise.resolve(false),
+                isReady: () => Promise.resolve(true),
+              }),
+          },
+        }),
+      },
+    });
+    const listen = jest.fn();
+
+    const convo = await conversation({ flow: graph });
+    convo.subscribe(listen);
+    await convo.isReady();
+    convo.unsubscribe(listen);
+    await convo.continue();
+
+    expect(listen).toHaveBeenCalledTimes(1);
   });
 
   describe('sub-conversation', () => {
     const mockNextMod = jest.fn();
-    const mockSubroutineMod = jest.mocked(conversation);
     const mockSubStepMod = jest.fn();
     const mockTestMod = jest.fn();
 
+    const edgeSub = createEdge({
+      end: 'subconvo',
+      start: 'start',
+    });
+    const edgeNext = createEdge({
+      end: 'next',
+      start: 'subconvo',
+    });
     const graph = createGraph({
-      edges: [
-        createEdge({
-          end: 'subconvo',
-          start: 'start',
-        }),
-        createEdge({
-          end: 'next',
-          start: 'subconvo',
-        }),
-      ],
-      vertices: {
+      starts: ['start'],
+      steps: {
         start: createVertex({
+          edges: { from: [], to: [edgeSub] },
           id: 'start',
           props: {
             module: mockTestMod,
           },
           text: 'start',
+          type: 'stadium',
         }),
         subconvo: createVertex({
+          edges: { from: [edgeSub], to: [edgeNext] },
           id: 'subconvo',
           props: {
             flow: createGraph({
-              vertices: {
-                subStart: createVertex({
+              starts: ['sub-start'],
+              steps: {
+                'sub-start': createVertex({
+                  edges: { from: [], to: [] },
                   id: 'sub-start',
                   props: {
                     module: mockSubStepMod,
                   },
                   text: 'sub-start',
+                  type: 'stadium',
                 }),
               },
             }),
-            module: mockSubroutineMod,
           },
           text: 'Sub-Conversation',
           type: 'subroutine',
         }),
         next: createVertex({
+          edges: { from: [edgeNext], to: [] },
           id: 'next',
           props: {
             module: mockNextMod,
@@ -506,7 +691,8 @@ describe('Conversation', () => {
 
     it('should throw an error if neither a graph or source are provided', async () => {
       const graph = createGraph({
-        vertices: {
+        starts: ['start'],
+        steps: {
           start: createVertex({
             id: 'start',
             props: {
@@ -515,6 +701,9 @@ describe('Conversation', () => {
                   isComplete: jest
                     .fn<() => Promise<boolean>>()
                     .mockResolvedValueOnce(false)
+                    .mockResolvedValue(true),
+                  isReady: jest
+                    .fn<() => Promise<boolean>>()
                     .mockResolvedValue(true),
                 }),
             },
@@ -533,25 +722,7 @@ describe('Conversation', () => {
       );
     });
 
-    it('should dynamically load external graph JSON', async () => {
-      jest
-        .mocked(readFile)
-        .mockResolvedValue(
-          '{"edges": [], "type": "flowchart", "vertices": {"start": {"id": "start", "props": {}, "type": "stadium"}}}'
-        );
-
-      try {
-        await conversation({
-          src: 'external',
-        });
-      } catch (err) {
-        // Do nothing
-      } finally {
-        expect(readFile).toHaveBeenCalled();
-      }
-    });
-
-    it('should be able to navigate back to the parent conversation', async () => {
+    it('should navigate back to the parent conversation', async () => {
       mockTestMod.mockReturnValueOnce({
         id: 'start',
         isComplete: jest
@@ -572,21 +743,13 @@ describe('Conversation', () => {
       await convo.continue();
       await convo.back();
 
-      expect(listener).toHaveBeenCalledTimes(4);
-
-      convo.unsubscribe(listener);
-      await convo.continue();
-
       expect(listener).toHaveBeenCalledWith(
         'back',
-        expect.objectContaining({
-          id: 'start',
-        })
+        expect.objectContaining({ id: 'start' })
       );
-      expect(listener).toHaveBeenCalledTimes(4);
     });
 
-    it('should be able to navigate forward in the parent conversation when done', async () => {
+    it('should navigate forward in the parent conversation when done', async () => {
       mockTestMod.mockReturnValue({
         id: 'start',
         test: 1,
@@ -601,6 +764,7 @@ describe('Conversation', () => {
         test: 2,
         isComplete: jest
           .fn<() => Promise<boolean>>()
+          .mockResolvedValueOnce(false)
           .mockResolvedValueOnce(false)
           .mockResolvedValue(true),
         isReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
